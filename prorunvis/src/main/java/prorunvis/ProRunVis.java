@@ -19,10 +19,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public final class ProRunVis {
     /**
@@ -32,13 +29,7 @@ public final class ProRunVis {
     }
 
     /**
-     * Entry point. Gets called if program is stared via the terminal.
-     *
-     * @param args parameters (path of directory with project
-     *             and optional -i flag if project should only be instrumented,
-     *             in that case the project does not need a main method as an entry point since it is not compiled).
-     * @throws IOException
-     * @throws InterruptedException
+     * Entry point for the standalone usage of ProRunVis.
      */
     public static void main(final String[] args) {
 
@@ -77,8 +68,6 @@ public final class ProRunVis {
             }
 
             inputPath = positionalArgs[0];
-            outputPath = "resources/out";
-
             if (cmd.hasOption("o")) {
                 outputPath = cmd.getOptionValue("o");
             }
@@ -98,21 +87,21 @@ public final class ProRunVis {
             System.err.println(e.getMessage());
             formatter.printHelp("java -jar <prorunvis.jar> <input_path> [options] \n\nWith options: \n", options);
             System.exit(1);
+            return;
         }
-
 
         StaticJavaParser.getParserConfiguration().setSymbolResolver(new JavaSymbolSolver(new CombinedTypeSolver()));
         ProjectRoot projectRoot = new SymbolSolverCollectionStrategy()
-                .collect(Paths.get(args[0]).toAbsolutePath());
+                .collect(Paths.get(inputPath).toAbsolutePath());
 
         File traceFile = new File(outputPath + "/Trace.tr");
 
         List<CompilationUnit> cus = new ArrayList<>();
         projectRoot.getSourceRoots().forEach(sr -> {
             try {
-                sr.tryToParse().forEach(cu -> cus.add(cu.getResult().get()));
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+                sr.tryToParse().forEach(cu -> cus.add(cu.getResult().orElseThrow()));
+            } catch (IOException | NoSuchElementException e) {
+                throw new RuntimeException("Error parsing compilation units: " + e.getMessage(), e);
             }
         });
 
@@ -124,22 +113,21 @@ public final class ProRunVis {
         });
         Instrumenter.saveInstrumented(projectRoot, outputPath + "/instrumented");
 
-        //run and process the tracing if not specified otherwise by the -i flag
+        // If not instrument-only, compile, run and process trace
         if (!instrumentOnly) {
             try {
                 CompileAndRun.run(cus, outputPath + "/instrumented", outputPath + "/compiled");
-                TraceProcessor processor = new TraceProcessor(map, traceFile.getPath(), Paths.get(args[0]));
+                TraceProcessor processor = new TraceProcessor(map, traceFile.getPath(), Paths.get(inputPath));
                 processor.start();
 
                 //save json trace to file
                 File jsonTrace = new File(outputPath + "/Trace.json");
-                BufferedWriter writer = new BufferedWriter(new FileWriter(jsonTrace));
-                Gson gson = new GsonBuilder().setPrettyPrinting().create();
-                writer.write(gson.toJson(processor.getNodeList()));
-                writer.flush();
-                writer.close();
+                try (BufferedWriter writer = new BufferedWriter(new FileWriter(jsonTrace))) {
+                    Gson gson = new GsonBuilder().setPrettyPrinting().create();
+                    writer.write(gson.toJson(processor.getNodeList()));
+                }
             } catch (IOException | InterruptedException e) {
-                System.err.println(e.getMessage());
+                System.err.println("Error during run or process: " + e.getMessage());
             }
         }
 
