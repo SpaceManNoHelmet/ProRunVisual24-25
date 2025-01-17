@@ -84,6 +84,7 @@ There is a separete [repository with a collection of examples](https://github.co
 ## Credit
 
 This was developed as student software project in winter 2023/2024 at Technical University Darmstadt.
+Development continued as a second software project in winter 24/25
 
 ## License
  <a href="LICENSE">
