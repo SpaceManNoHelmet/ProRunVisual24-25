@@ -107,6 +107,26 @@ public class TraceProcessor {
         nodeOfCurrent = traceMap.get(tokenValue);
         methodCallRanges = new ArrayList<>();
 
+        // ---------- NEW: Classify node and set method name if it's a method ----------
+        if (nodeOfCurrent instanceof MethodDeclaration methodDecl) {
+            traceNode.setNodeType("Function");
+            // get the real name from the source code (e.g. "main", "snowWhiteMirror", etc.)
+            String signature = methodDecl.getSignature().asString();
+// signature might look like: "snowWhiteMirror(String[], int[], int)"
+
+            traceNode.setNodeMethodName(signature);
+        } else if (nodeOfCurrent instanceof ForStmt
+                || nodeOfCurrent instanceof WhileStmt
+                || nodeOfCurrent instanceof DoStmt
+                || nodeOfCurrent instanceof ForEachStmt) {
+            traceNode.setNodeType("Loop");
+        } else if (nodeOfCurrent instanceof ThrowStmt) {
+            traceNode.setNodeType("Throw");
+        } else {
+            traceNode.setNodeType("Other");
+        }
+        // ----------
+
         fillRanges((getBlockStmt() == null)
                 ? nodeOfCurrent.getChildNodes()
                 : getBlockStmt().getChildNodes(), null);
@@ -121,7 +141,16 @@ public class TraceProcessor {
             }
             current.setIteration(iteration);
         }
-
+        // ------ NEW: set uniqueTraceId that merges base traceId + iteration (if iteration != 0) ------
+        if (current.getIteration() != null && current.getIteration() > 0) {
+            // e.g.  traceId="3", iteration=2  =>  uniqueTraceId="3_iter2"
+            String combined = current.getTraceID() + "_iter" + current.getIteration();
+            current.setUniqueTraceId(combined);
+        } else {
+            // If no iteration, just use the base traceId
+            current.setUniqueTraceId(current.getTraceID());
+        }
+        //
         // If jumpPackage is set and target is reached
         if (jumpPackage != null && jumpPackage.isTarget(nodeOfCurrent)) {
             Path targetPath = nodeOfCurrent.findCompilationUnit().get()

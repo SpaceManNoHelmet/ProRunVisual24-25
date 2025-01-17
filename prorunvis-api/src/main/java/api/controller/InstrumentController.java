@@ -3,6 +3,9 @@ package api.controller;
 import api.service.InstrumentationService;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.File;
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/api/instrument")
 public class InstrumentController {
@@ -12,16 +15,28 @@ public class InstrumentController {
         this.service = service;
     }
 
+    /**
+     * Now returns a String ID referencing a local folder
+     * instead of a DB primary key.
+     */
     @PostMapping
-    public Long instrumentProject(
+    public String instrumentProject(
             @RequestParam String projectName,
-            @RequestParam(required = false) String inputDir) {
-
-        // If inputDir is not provided, default to your given directory
+            @RequestParam(required = false) String inputDir
+    ) {
+        // If inputDir not provided, use some default
         if (inputDir == null || inputDir.isEmpty()) {
-            inputDir = "/Users/milanadhokari/Downloads/ProRunVis-examples-master/DualPivotQuicksort/java_copy/util";
+            inputDir = "/Users/yourname/Somewhere/defaultProjectDir";
         }
 
-        return service.instrumentProject(projectName, inputDir);
+        // Generate a unique ID (could be a timestamp, but here we use UUID)
+        String randomId = UUID.randomUUID().toString();
+
+        // Instrument the code, storing results in local folder named after randomId
+        // Notice we now pass `randomId` to the service
+        service.instrumentProject(projectName, inputDir, randomId);
+
+        // Return that ID so the frontend can pass it to subsequent endpoints
+        return randomId;
     }
 }

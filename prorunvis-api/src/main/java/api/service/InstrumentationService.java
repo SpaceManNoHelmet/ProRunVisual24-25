@@ -1,7 +1,5 @@
 package api.service;
 
-import api.model.InstrumentedCode;
-import api.repository.InstrumentedCodeRepository;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Node;
 import com.github.javaparser.utils.ProjectRoot;
@@ -10,21 +8,34 @@ import prorunvis.instrument.Instrumenter;
 import prorunvis.preprocess.Preprocessor;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * A reworked InstrumentationService that does NOT store data in a DB.
+ * Instead, it stores the instrumented code locally, keyed by a random ID.
+ */
 @Service
 public class InstrumentationService {
 
-    private final InstrumentedCodeRepository repo;
+    /**
+     * The base folder where we store each run's local data,
+     * keyed by a random ID (e.g. "resources/local_storage/<ID>").
+     */
+    private static final String LOCAL_STORAGE_DIR = "resources/local_storage";
 
-    public InstrumentationService(InstrumentedCodeRepository repo) {
-        this.repo = repo;
+    public InstrumentationService() {
+        // No repository injection needed anymore.
     }
 
+    /**
+     * Creates/cleans "resources/out" so the instrumentation can run
+     * from a clean slate. This is the same logic you had before.
+     */
     private void ensureCleanOutputDirectories() {
         File outDir = new File("resources/out");
         if (outDir.exists()) {
@@ -38,7 +49,6 @@ public class InstrumentationService {
                 throw new RuntimeException("Failed to clean output directories", e);
             }
         }
-
         if (!outDir.mkdirs()) {
             throw new RuntimeException("Failed to create output directory at resources/out.");
         }
@@ -49,21 +59,34 @@ public class InstrumentationService {
         }
     }
 
-    public Long instrumentProject(String projectName, String inputDirPath) {
+    /**
+     * Instruments the code and stores results in "resources/local_storage/<randomId>/".
+     *
+     * @param projectName   the name of the user's project
+     * @param inputDirPath  the folder containing the source code to be instrumented
+     * @param randomId      a unique ID that we can use for storing output
+     * @return Some success message (or path).
+     */
+    public String instrumentProject(String projectName,
+                                    String inputDirPath,
+                                    String randomId) {
+
+        // 1) Verify input directory is valid
         File inputDir = new File(inputDirPath);
         if (!inputDir.exists() || !inputDir.isDirectory()) {
             throw new RuntimeException("Input directory does not exist or is not a directory: " + inputDirPath);
         }
 
-        // Clean and set up output directories
+
+        // 2) Clean & set up "resources/out"
         ensureCleanOutputDirectories();
 
+        // 3) Parse & instrument code
         System.out.println("Parsing project at: " + inputDirPath);
         ProjectRoot projectRoot = Util.parseProject(inputDir);
         List<CompilationUnit> cus = Util.getCUs(projectRoot);
-
         if (cus.isEmpty()) {
-            throw new RuntimeException("No Java files found in provided directory: " + inputDirPath);
+            throw new RuntimeException("No Java files found in: " + inputDirPath);
         }
         System.out.println("Found " + cus.size() + " compilation units.");
 
@@ -73,40 +96,45 @@ public class InstrumentationService {
             Instrumenter.run(cu, map);
         }
 
-        // Setup the trace file before saving instrumented code
-        File traceFile = new File("resources/out/Trace.tr");
-        Instrumenter.setupTrace(traceFile);
 
-        System.out.println("Saving instrumented code to resources/out/instrumented ...");
+        // 5) Save instrumented code
         Instrumenter.saveInstrumented(projectRoot, "resources/out/instrumented");
 
-        // Verify that instrumented code was actually saved
+        // 6) Check that something was indeed saved
         File instrDir = new File("resources/out/instrumented");
         String[] instrumentedFiles = instrDir.list();
         if (instrumentedFiles == null || instrumentedFiles.length == 0) {
             throw new RuntimeException("No files found in instrumented directory after saving instrumented code.");
         }
-        System.out.println("Files in instrumented directory: ");
+        System.out.println("Files in instrumented directory:");
         for (String f : instrumentedFiles) {
             System.out.println(" - " + f);
         }
 
-        // Zip and encode instrumented project
+        // 7) Zip & encode
         System.out.println("Zipping instrumented code...");
         String zipBase64 = Util.zipAndEncode(projectRoot);
-
         if (zipBase64 == null || zipBase64.isEmpty()) {
             throw new RuntimeException("Failed to zip instrumented code.");
         }
 
-        System.out.println("Instrumented code zipped successfully. Storing in database...");
-        InstrumentedCode entity = new InstrumentedCode();
-        entity.setProjectName(projectName);
-        entity.setInstrumentedSourceZip(zipBase64);
+        // 8) Store the resulting Base64 in "resources/local_storage/<randomId>/instrumented.txt"
+        // Make a local folder for this randomId
+        File randomIdFolder = new File(LOCAL_STORAGE_DIR, randomId);
+        if (!randomIdFolder.exists()) {
+            randomIdFolder.mkdirs();
+        }
+        File outputFile = new File(randomIdFolder, "instrumented_base64.txt");
+        try (FileOutputStream fos = new FileOutputStream(outputFile)) {
+            fos.write(zipBase64.getBytes());
+        } catch (IOException e) {
+            throw new RuntimeException("Error writing local instrumented file: " + e.getMessage(), e);
+        }
 
-        entity = repo.save(entity);
-        System.out.println("Instrumented code saved with ID: " + entity.getId());
+        System.out.println("Instrumented code stored locally in: " + outputFile.getAbsolutePath());
 
-        return entity.getId();
+        // Return a success message
+        return "Instrumented code saved under ID=" + randomId
+                + " at: " + outputFile.getAbsolutePath();
     }
 }

@@ -4,8 +4,10 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
 
 import java.io.*;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -48,9 +50,21 @@ public final class CompileAndRun {
         Path sourcePath = mainUnit.getStorage().get().getDirectory();
 
         // Compile
-        ProcessBuilder compilePb = new ProcessBuilder("javac", "-sourcepath",
-                instrumentedInPath, "-d", compiledOutPath, sourcePath.resolve(fileName).toString());
-        compilePb.directory(new File(instrumentedInPath));
+        File instrDir = new File(instrumentedInPath);
+        List<String> allJavaFiles = new ArrayList<>();
+
+        Files.walk(instrDir.toPath())
+                .filter(p -> p.toString().endsWith(".java"))
+                .forEach(p -> allJavaFiles.add(p.toAbsolutePath().toString()));
+
+        List<String> command = new ArrayList<>();
+        command.add("javac");
+        command.add("-sourcepath");
+        command.add(instrumentedInPath);
+        command.add("-d");
+        command.add(compiledOutPath);
+        command.addAll(allJavaFiles);
+        ProcessBuilder compilePb = new ProcessBuilder(command);
         Process compileProc = compilePb.start();
         int compileExit = compileProc.waitFor();
         if (compileExit != 0) {
@@ -59,6 +73,7 @@ public final class CompileAndRun {
             throw new InterruptedException("An error occurred during compilation.\n" + compileError);
         }
 
+        System.out.println("Compilation succeeded with all .java files!");
         // Derive the main class name
         // Convert the path difference to a package name
         String prefix = Paths.get(instrumentedInPath).toAbsolutePath().toString();
@@ -75,8 +90,9 @@ public final class CompileAndRun {
 
         // Run
         ProcessBuilder runPb = new ProcessBuilder("java", "-cp", compiledOutPath, mainClass);
-        runPb.directory(new File(instrumentedInPath)); // Run from the instrumented directory
+        runPb.directory(new File(compiledOutPath));// Run from the instrumented directory
         Process runProc = runPb.start();
+        System.out.println("Running: java -cp " + compiledOutPath + " " + mainClass);
         int runExit = runProc.waitFor();
         if (runExit != 0) {
             String runError = new BufferedReader(new InputStreamReader(runProc.getErrorStream()))

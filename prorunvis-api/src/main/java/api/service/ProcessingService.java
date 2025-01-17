@@ -1,69 +1,77 @@
 package api.service;
 
-import api.model.TraceData;
-import api.model.ProcessedTrace;
-import api.repository.TraceDataRepository;
-import api.repository.ProcessedTraceRepository;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.Node;
 import com.github.javaparser.utils.ProjectRoot;
 import com.google.gson.Gson;
-import com.github.javaparser.ast.Node;
 import org.springframework.stereotype.Service;
 import prorunvis.trace.TraceNode;
 import prorunvis.trace.process.TraceProcessor;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Service
 public class ProcessingService {
 
-    private final ProcessedTraceRepository procRepo;
-    private final TraceDataRepository traceRepo;
+    private static final String LOCAL_STORAGE_DIR = "resources/local_storage";
 
-    public ProcessingService(ProcessedTraceRepository procRepo, TraceDataRepository traceRepo) {
-        this.procRepo = procRepo;
-        this.traceRepo = traceRepo;
-    }
+    /**
+     * We do NOT return a path anymore. We'll just do it as `void`
+     * or you can still return the path to "processedTrace.json" if you want.
+     */
+    public void processTrace(String traceId) {
+        // 1) local_storage/<traceId> folder
+        File localIdFolder = new File(LOCAL_STORAGE_DIR, traceId);
+        if (!localIdFolder.exists() || !localIdFolder.isDirectory()) {
+            throw new RuntimeException("Local ID folder does not exist: " + localIdFolder.getAbsolutePath());
+        }
 
-    public Long processTrace(Long traceDataId) {
-        TraceData td = traceRepo.findById(traceDataId)
-                .orElseThrow(() -> new RuntimeException("Trace not found"));
+        // 2) local_storage/<traceId>/Trace.tr must exist
+        File traceFile = new File(localIdFolder, "Trace.tr");
+        if (!traceFile.exists()) {
+            throw new RuntimeException("Trace file not found: " + traceFile.getAbsolutePath());
+        }
 
-        File tempTraceFile = Util.createTempTraceFile(td.getTraceFileContent());
-
-        // Re-parse the instrumented code
+        // 3) re-parse code from resources/out/instrumented
+        // (or wherever your instrumented code remains)
         Path codeRoot = Paths.get("resources/in");
         ProjectRoot projectRoot = Util.parseProject(codeRoot.toFile());
         List<CompilationUnit> cus = Util.getCUs(projectRoot);
 
-        // Build the map again
+        // 4) build the map
         Map<Integer, Node> map = new HashMap<>();
         for (CompilationUnit cu : cus) {
             prorunvis.preprocess.Preprocessor.run(cu);
             prorunvis.instrument.Instrumenter.run(cu, map);
         }
 
-        // Now run the TraceProcessor with a fully populated map
-        TraceProcessor processor = new TraceProcessor(map, tempTraceFile.getPath(), codeRoot);
+        // 5) run the TraceProcessor
+        prorunvis.trace.process.TraceProcessor processor =
+                new prorunvis.trace.process.TraceProcessor(map, traceFile.getAbsolutePath(), codeRoot);
+
         try {
             processor.start();
         } catch (Exception e) {
             throw new RuntimeException("Processing failed: " + e.getMessage(), e);
         }
 
+        // 6) convert the final node list to JSON
         List<TraceNode> nodeList = processor.getNodeList();
         String json = new Gson().toJson(nodeList);
 
-        ProcessedTrace pt = new ProcessedTrace();
-        pt.setTraceDataId(traceDataId);
-        pt.setProcessedJson(json);
-        pt = procRepo.save(pt);
+        // 7) store processedTrace.json in local_storage/<traceId>/processedTrace.json
+        File outputJson = new File(localIdFolder, "processedTrace.json");
+        try (FileOutputStream fos = new FileOutputStream(outputJson)) {
+            fos.write(json.getBytes());
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to write processedTrace.json at: " + outputJson.getAbsolutePath(), e);
+        }
 
-        return pt.getId();
+        System.out.println("Processing complete. JSON stored at: " + outputJson.getAbsolutePath());
     }
 }
